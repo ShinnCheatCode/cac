@@ -1,0 +1,106 @@
+name: Build ZIP
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP=$(ls -1 *.zip | head -n 1)
+          echo "ZIP=$ZIP"
+          test -f "$ZIP"
+
+          rm -rf "$RUNNER_TEMP/src"
+          mkdir -p "$RUNNER_TEMP/src"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/src"
+
+          PROJ=$(find "$RUNNER_TEMP/src" -name "*.xcodeproj" | head -n 1)
+          test -n "$PROJ"
+
+          ROOT=$(dirname "$PROJ")
+          echo "PROJ=$PROJ" >> "$GITHUB_ENV"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Found project: $PROJ"
+
+      - name: Make scheme 3105
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROJ/xcshareddata/xcschemes"
+          cat > "$PROJ/xcshareddata/xcschemes/3105.xcscheme" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Scheme LastUpgradeVersion="1540" version="1.7">
+            <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
+              <BuildActionEntries>
+                <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
+                  <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="3105A001" BuildableName="3105.app" BlueprintName="3105" ReferencedContainer="container:ThreeOneOSFive.xcodeproj"/>
+                </BuildActionEntry>
+              </BuildActionEntries>
+            </BuildAction>
+            <LaunchAction buildConfiguration="Release" selectedDebuggerIdentifier="" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.PosixSpawn" launchStyle="0" useCustomWorkingDirectory="NO">
+              <BuildableProductRunnable runnableDebuggingMode="0">
+                <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="3105A001" BuildableName="3105.app" BlueprintName="3105" ReferencedContainer="container:ThreeOneOSFive.xcodeproj"/>
+              </BuildableProductRunnable>
+            </LaunchAction>
+            <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES"/>
+            <AnalyzeAction buildConfiguration="Release"/>
+            <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
+          </Scheme>
+          EOF
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          xcodebuild -list -project ThreeOneOSFive.xcodeproj
+          xcodebuild \
+            -project ThreeOneOSFive.xcodeproj \
+            -scheme 3105 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -type d -name "*.app" | head -n 1)
+          echo "APP=$APP"
+          test -n "$APP"
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -qry Shinn-unsigned.ipa Payload
+          ls -lh Shinn-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shinn-unsigned
+          path: ${{ runner.temp }}/Shinn-unsigned.ipa
+          if-no-files-found: error
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/DerivedData/Logs
+          if-no-files-found: ignore
