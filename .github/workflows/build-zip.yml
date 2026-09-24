@@ -4,183 +4,336 @@ on:
   push:
     branches:
       - main
+
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build IPA
     runs-on: macos-14
     timeout-minutes: 60
 
     steps:
+
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
       - name: Checkout
         uses: actions/checkout@v4
         with:
           clean: true
           fetch-depth: 0
 
+
+      # =========================================================
+      # 2. SHOW REPOSITORY FILES
+      # =========================================================
       - name: Show repo files
+        shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== ROOT FILES ==="
+          echo "========================================"
+          echo "REPOSITORY FILES"
+          echo "========================================"
+
+          pwd
+
+          echo ""
+          echo "Root:"
           ls -lah
 
           echo ""
-          echo "=== ZIP FILES ==="
-          find . -maxdepth 3 -type f -iname "*.zip" -print
+          echo "ZIP FILES:"
+          find . -maxdepth 3 -type f -iname "*.zip" -print || true
 
+
+      # =========================================================
+      # 3. EXTRACT source.zip
+      # =========================================================
       - name: Extract source.zip
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP=""
+          echo "========================================"
+          echo "FIND source.zip"
+          echo "========================================"
 
-          # Tìm source.zip không phân biệt chữ hoa/thường
-          while IFS= read -r file; do
-            ZIP="$file"
-            break
-          done < <(find . -maxdepth 3 -type f -iname "source.zip" -print)
+          ZIP=$(find . \
+            -maxdepth 3 \
+            -type f \
+            -iname "source.zip" \
+            -print \
+            | head -1)
 
           if [ -z "${ZIP:-}" ]; then
             echo "❌ Không tìm thấy source.zip"
             echo ""
             echo "Các file ZIP hiện có:"
             find . -maxdepth 3 -type f -iname "*.zip" -print || true
-            echo ""
-            echo "Hãy đặt source.zip ở thư mục gốc repository."
             exit 1
           fi
 
-          echo "✅ Found source archive:"
+          echo "✅ Found:"
           echo "$ZIP"
 
           SRC="$RUNNER_TEMP/source"
+
           rm -rf "$SRC"
           mkdir -p "$SRC"
 
           echo ""
-          echo "=== EXTRACTING ==="
+          echo "Extracting..."
+
           unzip -q -o "$ZIP" -d "$SRC"
 
           echo ""
-          echo "=== SOURCE TREE ==="
+          echo "========================================"
+          echo "SOURCE TREE"
+          echo "========================================"
+
           find "$SRC" -maxdepth 5 -print | head -300
 
+
+      # =========================================================
+      # 4. FIND XCODE PROJECT / WORKSPACE
+      # =========================================================
+      - name: Detect Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="$RUNNER_TEMP/source"
+
+          echo "========================================"
+          echo "SEARCH XCODE PROJECT"
+          echo "========================================"
+
+          WORKSPACE=$(
+            find "$SRC" \
+              -type d \
+              -name "*.xcworkspace" \
+              ! -path "*/Pods/*" \
+              ! -path "*/Carthage/*" \
+              -print \
+              | head -1
+          )
+
+          PROJECT=$(
+            find "$SRC" \
+              -type d \
+              -name "*.xcodeproj" \
+              ! -path "*/Pods/*" \
+              ! -path "*/Carthage/*" \
+              -print \
+              | head -1
+          )
+
           echo ""
-          echo "=== SEARCH XCODE PROJECT ==="
+          echo "Workspace:"
+          echo "${WORKSPACE:-none}"
 
-          WORKSPACE=$(find "$SRC" \
-            -type d \
-            -name "*.xcworkspace" \
-            ! -path "*/Pods/*" \
-            | head -1 || true)
-
-          PROJECT=$(find "$SRC" \
-            -type d \
-            -name "*.xcodeproj" \
-            ! -path "*/Pods/*" \
-            | head -1 || true)
+          echo ""
+          echo "Project:"
+          echo "${PROJECT:-none}"
 
           if [ -z "${PROJECT:-}" ] && [ -z "${WORKSPACE:-}" ]; then
-            echo "❌ Không tìm thấy .xcodeproj hoặc .xcworkspace trong source.zip"
+            echo ""
+            echo "❌ Không tìm thấy .xcodeproj hoặc .xcworkspace"
+            echo ""
+            echo "SOURCE TREE:"
+            find "$SRC" -maxdepth 6 -print | head -500
             exit 1
           fi
 
           if [ -n "${WORKSPACE:-}" ]; then
+
             ROOT=$(dirname "$WORKSPACE")
 
             echo "USE_WORKSPACE=1" >> "$GITHUB_ENV"
             echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-            echo "PROJECT=${PROJECT:-}" >> "$GITHUB_ENV"
+
+            if [ -n "${PROJECT:-}" ]; then
+              echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+            fi
+
           else
+
             ROOT=$(dirname "$PROJECT")
 
             echo "USE_WORKSPACE=0" >> "$GITHUB_ENV"
             echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
           fi
 
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
           echo ""
-          echo "=== BUILD CONFIGURATION ==="
-          echo "ROOT=$ROOT"
-          echo "WORKSPACE=${WORKSPACE:-none}"
-          echo "PROJECT=${PROJECT:-none}"
+          echo "========================================"
+          echo "SELECTED BUILD ROOT"
+          echo "========================================"
 
+          echo "ROOT:"
+          echo "$ROOT"
+
+          echo ""
+          echo "WORKSPACE:"
+          echo "${WORKSPACE:-none}"
+
+          echo ""
+          echo "PROJECT:"
+          echo "${PROJECT:-none}"
+
+
+      # =========================================================
+      # 5. SELECT XCODE
+      # =========================================================
       - name: Select Xcode
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "XCODE VERSION"
+          echo "========================================"
+
           sudo xcode-select -s /Applications/Xcode.app
+
+          xcode-select -p
           xcodebuild -version
 
-      - name: Clean DerivedData
-        run: |
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
 
-      - name: Detect scheme
+      # =========================================================
+      # 6. CLEAN DERIVED DATA
+      # =========================================================
+      - name: Clean DerivedData
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "CLEAN DERIVED DATA"
+          echo "========================================"
+
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData/"*
+
+          echo "✅ DerivedData cleaned"
+
+
+      # =========================================================
+      # 7. SHOW XCODE PROJECT INFORMATION
+      # =========================================================
+      - name: Show Xcode project information
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$ROOT"
 
-          echo "=== XCODE LIST ==="
+          echo "========================================"
+          echo "XCODE PROJECT INFORMATION"
+          echo "========================================"
 
           if [ "${USE_WORKSPACE}" = "1" ]; then
-            LIST=$(xcodebuild -list -workspace "$(basename "$WORKSPACE")")
+
+            echo "Using workspace:"
+            echo "$WORKSPACE"
+
+            xcodebuild \
+              -list \
+              -workspace "$(basename "$WORKSPACE")"
+
           else
-            LIST=$(xcodebuild -list -project "$(basename "$PROJECT")")
+
+            echo "Using project:"
+            echo "$PROJECT"
+
+            xcodebuild \
+              -list \
+              -project "$(basename "$PROJECT")"
+
+          fi
+
+
+      # =========================================================
+      # 8. SELECT SCHEME
+      # =========================================================
+      - name: Select scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$ROOT"
+
+          echo "========================================"
+          echo "SELECT SCHEME"
+          echo "========================================"
+
+          # Source.zip hiện tại có:
+          #
+          # Project:
+          # ThreeOneOSFive.xcodeproj
+          #
+          # Target:
+          # 3105
+          #
+          # Scheme:
+          # 3105
+          #
+          # Vì vậy không dùng awk để tự detect nữa.
+
+          SCHEME="3105"
+
+          echo ""
+          echo "Selected scheme:"
+          echo "$SCHEME"
+
+          echo ""
+          echo "Checking scheme..."
+
+          if [ "${USE_WORKSPACE}" = "1" ]; then
+
+            LIST=$(xcodebuild \
+              -list \
+              -workspace "$(basename "$WORKSPACE")")
+
+          else
+
+            LIST=$(xcodebuild \
+              -list \
+              -project "$(basename "$PROJECT")")
+
           fi
 
           echo "$LIST"
 
           echo ""
-          echo "=== DETECT SCHEME ==="
+          echo "Checking for scheme: $SCHEME"
 
-          SCHEME=$(echo "$LIST" | awk '
-            /Schemes:/ {
-              found=1
-              next
-            }
-            found && NF {
-              gsub(/^[ \t]+|[ \t]+$/, "", $0)
-              print
-              exit
-            }
-          ')
+          if echo "$LIST" | grep -E "^[[:space:]]+$SCHEME$" >/dev/null; then
 
-          PREFERRED=$(echo "$LIST" | awk '
-            /Schemes:/ {
-              found=1
-              next
-            }
-            found && NF {
-              gsub(/^[ \t]+|[ \t]+$/, "", $0)
+            echo "✅ Scheme $SCHEME found"
 
-              if (
-                tolower($0) ~ /shinn/ ||
-                tolower($0) ~ /3105/
-              ) {
-                print
-                exit
-              }
-            }
-          ')
+          else
 
-          if [ -n "${PREFERRED:-}" ]; then
-            SCHEME="$PREFERRED"
+            echo "⚠️ Không tìm thấy scheme $SCHEME trong danh sách."
+
+            echo ""
+            echo "Tuy nhiên project hiện tại báo target 3105."
+            echo "Tiếp tục build với scheme 3105."
+
           fi
 
-          if [ -z "${SCHEME:-}" ]; then
-            echo "❌ Không detect được scheme"
-            exit 1
-          fi
-
+          echo ""
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
 
-          echo "✅ Detected scheme:"
-          echo "$SCHEME"
+          echo "SCHEME=$SCHEME"
 
+
+      # =========================================================
+      # 9. ARCHIVE
+      # =========================================================
       - name: Archive unsigned
         shell: bash
         run: |
@@ -188,96 +341,144 @@ jobs:
 
           cd "$ROOT"
 
+          echo "========================================"
+          echo "ARCHIVE"
+          echo "========================================"
+
           ARCHIVE="$RUNNER_TEMP/ShinnCheat.xcarchive"
 
           rm -rf "$ARCHIVE"
 
-          COMMON=(
+          echo "Archive path:"
+          echo "$ARCHIVE"
+
+          echo ""
+          echo "Scheme:"
+          echo "$SCHEME"
+
+          COMMON_ARGS=(
+
             -scheme "$SCHEME"
+
             -configuration Release
+
             -destination "generic/platform=iOS"
+
             -archivePath "$ARCHIVE"
 
             CODE_SIGN_IDENTITY=""
+
             CODE_SIGNING_REQUIRED=NO
+
             CODE_SIGNING_ALLOWED=NO
+
             DEVELOPMENT_TEAM=""
 
             -allowProvisioningUpdates=NO
+
           )
 
-          echo "=== BUILD START ==="
-          echo "Scheme: $SCHEME"
-          echo "Root: $ROOT"
+          echo ""
+          echo "========================================"
+          echo "START XCODEBUILD ARCHIVE"
+          echo "========================================"
 
           if [ "${USE_WORKSPACE}" = "1" ]; then
 
             xcodebuild archive \
               -workspace "$(basename "$WORKSPACE")" \
-              "${COMMON[@]}" \
-              | tee "$RUNNER_TEMP/build.log"
+              "${COMMON_ARGS[@]}" \
+              2>&1 | tee "$RUNNER_TEMP/build.log"
 
           else
 
             xcodebuild archive \
               -project "$(basename "$PROJECT")" \
-              "${COMMON[@]}" \
-              | tee "$RUNNER_TEMP/build.log"
+              "${COMMON_ARGS[@]}" \
+              2>&1 | tee "$RUNNER_TEMP/build.log"
 
           fi
 
           echo ""
-          echo "=== ARCHIVE COMPLETE ==="
+          echo "========================================"
+          echo "ARCHIVE RESULT"
+          echo "========================================"
 
           if [ ! -d "$ARCHIVE" ]; then
-            echo "❌ Archive không tồn tại"
+
+            echo "❌ Archive không được tạo"
+
             exit 1
+
           fi
+
+          echo "✅ Archive created:"
+          echo "$ARCHIVE"
 
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
+
+      # =========================================================
+      # 10. FIND APP
+      # =========================================================
       - name: Find built app
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== SEARCH APP ==="
+          echo "========================================"
+          echo "FIND BUILT APP"
+          echo "========================================"
 
-          find "$ARCHIVE/Products/Applications" \
-            -maxdepth 2 \
-            -name "*.app" \
-            -print
+          echo "Archive:"
+          echo "$ARCHIVE"
 
-          APP=$(find "$ARCHIVE/Products/Applications" \
-            -maxdepth 2 \
-            -name "*.app" \
-            | head -1)
+          APP=$(
+            find "$ARCHIVE/Products/Applications" \
+              -maxdepth 1 \
+              -type d \
+              -name "*.app" \
+              -print \
+              | head -1
+          )
 
           if [ -z "${APP:-}" ]; then
-            echo "❌ Không tìm thấy .app trong archive"
-            find "$ARCHIVE" | head -200
+
+            echo "❌ Không tìm thấy .app"
+
+            echo ""
+            echo "Archive contents:"
+            find "$ARCHIVE" -maxdepth 6 -print | head -300
+
             exit 1
+
           fi
 
-          echo "APP=$APP" >> "$GITHUB_ENV"
-
           echo ""
-          echo "✅ APP:"
+          echo "✅ APP FOUND:"
           echo "$APP"
 
           echo ""
-          echo "=== APP INFO ==="
+          echo "APP INFO:"
           ls -lah "$APP"
 
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 11. PACKAGE IPA
+      # =========================================================
       - name: Package IPA
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${APP:-}" ]; then
-            echo "❌ APP chưa được xác định"
-            exit 1
-          fi
+          echo "========================================"
+          echo "PACKAGE IPA"
+          echo "========================================"
+
+          echo "APP:"
+          echo "$APP"
 
           PKG="$RUNNER_TEMP/ipa"
 
@@ -285,21 +486,75 @@ jobs:
 
           mkdir -p "$PKG/Payload"
 
+          echo ""
+          echo "Copying app..."
+
           cp -R "$APP" "$PKG/Payload/"
+
+          echo ""
+          echo "Payload:"
+          find "$PKG/Payload" -maxdepth 2 -print | head -100
 
           cd "$PKG"
 
-          echo "=== CREATE IPA ==="
+          echo ""
+          echo "Creating IPA..."
 
           zip -qry \
             "$GITHUB_WORKSPACE/ShinnCheat.ipa" \
             Payload
 
           echo ""
-          echo "=== IPA CREATED ==="
+          echo "========================================"
+          echo "IPA CREATED"
+          echo "========================================"
 
-          ls -lah "$GITHUB_WORKSPACE/ShinnCheat.ipa"
+          ls -lh "$GITHUB_WORKSPACE/ShinnCheat.ipa"
 
+          echo ""
+          echo "SHA256:"
+
+          shasum -a 256 \
+            "$GITHUB_WORKSPACE/ShinnCheat.ipa"
+
+
+      # =========================================================
+      # 12. VERIFY IPA
+      # =========================================================
+      - name: Verify IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY IPA"
+          echo "========================================"
+
+          IPA="$GITHUB_WORKSPACE/ShinnCheat.ipa"
+
+          if [ ! -f "$IPA" ]; then
+
+            echo "❌ IPA không tồn tại"
+
+            exit 1
+
+          fi
+
+          echo "IPA:"
+          ls -lh "$IPA"
+
+          echo ""
+          echo "IPA CONTENTS:"
+
+          unzip -l "$IPA" | head -100
+
+          echo ""
+          echo "✅ IPA verification completed"
+
+
+      # =========================================================
+      # 13. UPLOAD IPA
+      # =========================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -307,6 +562,10 @@ jobs:
           path: ShinnCheat.ipa
           if-no-files-found: error
 
+
+      # =========================================================
+      # 14. UPLOAD BUILD LOG IF FAILED
+      # =========================================================
       - name: Upload Build Log
         if: failure()
         uses: actions/upload-artifact@v4
