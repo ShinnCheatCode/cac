@@ -1,20 +1,189 @@
-- name: Extract 1234.zip
-  shell: bash
-  run: |
-    set -euo pipefail
+name: Build 1234 IPA
 
-    ZIP=$(find . -maxdepth 2 -type f -iname "1234.zip" | head -1)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-    if [ -z "$ZIP" ]; then
-      echo "❌ 1234.zip not found"
-      exit 1
-    fi
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
 
-    echo "Found: $ZIP"
+    steps:
+      # 1. Checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
 
-    mkdir -p "$RUNNER_TEMP/source"
+      # 2. Select Xcode
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
 
-    # Dùng ditto thay vì unzip
-    ditto -x -k "$ZIP" "$RUNNER_TEMP/source"
+      # 3. Show files
+      - name: Show Repository Files
+        run: |
+          pwd
+          ls -lah
+          find . -maxdepth 2 -type f
 
-    echo "✅ Extract completed"
+      # 4. Extract 1234.zip
+      - name: Extract 1234.zip
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP=$(find . -maxdepth 2 -type f -name "1234.zip" | head -1)
+
+          if [ -z "$ZIP" ]; then
+            echo "❌ 1234.zip not found"
+            exit 1
+          fi
+
+          echo "Found: $ZIP"
+
+          SRC="$RUNNER_TEMP/source"
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+
+          ditto -x -k "$ZIP" "$SRC"
+
+          echo "Extract completed"
+
+      # 5. Detect Project
+      - name: Detect Xcode Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="$RUNNER_TEMP/source"
+
+          WORKSPACE=$(find "$SRC" -type d -name "*.xcworkspace" ! -path "*/Pods/*" | head -1)
+          PROJECT=$(find "$SRC" -type d -name "*.xcodeproj" ! -path "*/Pods/*" | head -1)
+
+          if [ -n "${WORKSPACE:-}" ]; then
+            ROOT=$(dirname "$WORKSPACE")
+            echo "USE_WORKSPACE=1" >> $GITHUB_ENV
+            echo "WORKSPACE=$WORKSPACE" >> $GITHUB_ENV
+          elif [ -n "${PROJECT:-}" ]; then
+            ROOT=$(dirname "$PROJECT")
+            echo "USE_WORKSPACE=0" >> $GITHUB_ENV
+            echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+          else
+            echo "❌ No Xcode project found"
+            find "$SRC" -maxdepth 5
+            exit 1
+          fi
+
+          echo "ROOT=$ROOT" >> $GITHUB_ENV
+
+      # 6. Detect Scheme
+      - name: Detect Scheme
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$ROOT"
+
+          if [ "$USE_WORKSPACE" = "1" ]; then
+            LIST=$(xcodebuild -list -workspace "$(basename "$WORKSPACE")")
+          else
+            LIST=$(xcodebuild -list -project "$(basename "$PROJECT")")
+          fi
+
+          echo "$LIST"
+
+          SCHEME=$(echo "$LIST" | awk '/Schemes:/{getline; print; exit}' | xargs)
+
+          if [ -z "$SCHEME" ]; then
+            echo "❌ Scheme not found"
+            exit 1
+          fi
+
+          echo "SCHEME=$SCHEME" >> $GITHUB_ENV
+          echo "Using Scheme: $SCHEME"
+
+      # 7. Clean
+      - name: Clean DerivedData
+        run: rm -rf ~/Library/Developer/Xcode/DerivedData/*
+
+      # 8. Archive
+      - name: Archive App
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$ROOT"
+
+          ARCHIVE="$RUNNER_TEMP/1234.xcarchive"
+
+          if [ "$USE_WORKSPACE" = "1" ]; then
+            xcodebuild archive \
+              -workspace "$(basename "$WORKSPACE")" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -destination "generic/platform=iOS" \
+              -archivePath "$ARCHIVE" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM="" \
+              | xcpretty || true
+          else
+            xcodebuild archive \
+              -project "$(basename "$PROJECT")" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -destination "generic/platform=iOS" \
+              -archivePath "$ARCHIVE" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM="" \
+              | xcpretty || true
+          fi
+
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      # 9. Find App
+      - name: Find Built App
+        shell: bash
+        run: |
+          APP=$(find "$ARCHIVE/Products/Applications" -name "*.app" | head -1)
+
+          if [ -z "$APP" ]; then
+            echo "❌ App not found"
+            exit 1
+          fi
+
+          echo "APP=$APP" >> $GITHUB_ENV
+
+      # 10. Create IPA
+      - name: Package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir Payload
+          cp -R "$APP" Payload/
+
+          zip -qry 1234.ipa Payload
+
+          ls -lh 1234.ipa
+
+      # 11. Verify IPA
+      - name: Verify IPA
+        run: unzip -l 1234.ipa | head -40
+
+      # 12. Upload IPA
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: 1234-IPA
+          path: 1234.ipa
+          if-no-files-found: error
