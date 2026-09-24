@@ -1,8 +1,9 @@
-name: Build 123 IPA
+name: Build 1234 IPA
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -11,7 +12,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Select Xcode
@@ -19,27 +20,27 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
-      - name: Extract 123.zip
+      - name: Extract 1234.zip
         shell: bash
         run: |
           set -e
 
-          ZIP=$(find . -type f -iname "123.zip" | head -1)
+          ZIP=$(find . -type f -iname "1234.zip" | head -1)
 
           if [ -z "$ZIP" ]; then
-            echo "123.zip not found"
+            echo "❌ 1234.zip not found"
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/src"
-          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/src"
+          mkdir -p "$RUNNER_TEMP/source"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/source"
 
-      - name: Detect project
+      - name: Detect Project
         shell: bash
         run: |
           set -e
 
-          SRC="$RUNNER_TEMP/src"
+          SRC="$RUNNER_TEMP/source"
 
           WORKSPACE=$(find "$SRC" -name "*.xcworkspace" | head -1)
           PROJECT=$(find "$SRC" -name "*.xcodeproj" | head -1)
@@ -56,9 +57,10 @@ jobs:
 
           echo "ROOT=$ROOT" >> $GITHUB_ENV
 
-      - name: Detect scheme
+      - name: Detect Scheme
         shell: bash
         run: |
+          set -e
           cd "$ROOT"
 
           if [ "$USE_WORKSPACE" = "1" ]; then
@@ -68,14 +70,15 @@ jobs:
           fi
 
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
-          echo "Scheme: $SCHEME"
+          echo "Using Scheme: $SCHEME"
 
-      - name: Archive
+      - name: Build Archive
         shell: bash
         run: |
+          set -e
           cd "$ROOT"
 
-          ARCHIVE="$RUNNER_TEMP/123.xcarchive"
+          ARCHIVE="$RUNNER_TEMP/1234.xcarchive"
 
           if [ "$USE_WORKSPACE" = "1" ]; then
             xcodebuild archive \
@@ -84,7 +87,9 @@ jobs:
               -configuration Release \
               -destination "generic/platform=iOS" \
               -archivePath "$ARCHIVE" \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
           else
             xcodebuild archive \
               -project "$(basename "$PROJECT")" \
@@ -92,7 +97,9 @@ jobs:
               -configuration Release \
               -destination "generic/platform=iOS" \
               -archivePath "$ARCHIVE" \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
           fi
 
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
@@ -100,15 +107,21 @@ jobs:
       - name: Create IPA
         shell: bash
         run: |
+          set -e
+
           APP=$(find "$ARCHIVE/Products/Applications" -name "*.app" | head -1)
 
-          mkdir Payload
+          mkdir -p Payload
           cp -R "$APP" Payload/
 
-          zip -qry 123.ipa Payload
+          zip -qry 1234.ipa Payload
+
+      - name: Verify IPA
+        run: unzip -l 1234.ipa | head -30
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: 123-IPA
-          path: 123.ipa
+          name: 1234-IPA
+          path: 1234.ipa
+          if-no-files-found: error
