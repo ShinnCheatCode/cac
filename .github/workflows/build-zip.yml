@@ -1,4 +1,4 @@
-name: Build IPA
+name: Build Shinn IPA
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout latest code
         uses: actions/checkout@v4
         with:
           clean: true
@@ -22,114 +22,74 @@ jobs:
         run: |
           ls -lah
           echo "ZIP LIST:"
-          find . -maxdepth 2 -iname "*.zip"
+          find . -maxdepth 1 -name "*.zip"
 
-      - name: Extract source.zip
+      - name: Extract Source ZIP
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          ZIP=""
-          for candidate in "./source.zip" "./Source.zip" "./SOURCE.ZIP"; do
-            if [ -f "$candidate" ]; then
-              ZIP="$candidate"
-              break
-            fi
-          done
+          ZIP="./Source.zip"
 
-          if [ -z "$ZIP" ]; then
-            ZIP=$(find . -maxdepth 2 -iname "source.zip" | head -1 || true)
-          fi
-
-          if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
-            echo "Không tìm thấy source.zip"
-            find . -maxdepth 3 -iname "*.zip" || true
+          if [ ! -f "$ZIP" ]; then
+            echo "Không tìm thấy Source.zip"
             exit 1
           fi
-
-          echo "USING_ZIP=$ZIP"
 
           rm -rf "$RUNNER_TEMP/source"
           mkdir -p "$RUNNER_TEMP/source"
+
           unzip -o "$ZIP" -d "$RUNNER_TEMP/source"
 
           echo "SOURCE:"
-          find "$RUNNER_TEMP/source" -maxdepth 3
+          find "$RUNNER_TEMP/source" -maxdepth 2
 
           PROJECT=$(find "$RUNNER_TEMP/source" -name "*.xcodeproj" | head -1)
+
           if [ -z "$PROJECT" ]; then
-            echo "Không tìm thấy .xcodeproj trong source.zip"
+            echo "Không tìm thấy xcode project"
             exit 1
           fi
 
-          WORKSPACE=$(find "$RUNNER_TEMP/source" -name "*.xcworkspace" ! -path "*.xcodeproj/*" | head -1 || true)
-
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-          echo "ROOT=$(dirname "$PROJECT")" >> "$GITHUB_ENV"
-          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-
-          SCHEME=$(xcodebuild -list -project "$PROJECT" 2>/dev/null | awk '/Schemes/{f=1;next} f&&NF{print $1; exit}')
-          if [ -z "$SCHEME" ]; then
-            SCHEME="3105"
-          fi
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "Found scheme: $SCHEME"
+          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+          echo "ROOT=$(dirname "$PROJECT")" >> $GITHUB_ENV
 
       - name: Clean Xcode
-        run: rm -rf ~/Library/Developer/Xcode/DerivedData/*
+        run: |
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
 
-      - name: Build
+      - name: Build IPA
         shell: bash
         run: |
-          set -euo pipefail
           cd "$ROOT"
 
-          COMMON=(
-            -configuration Release
-            -sdk iphoneos
-            -destination "generic/platform=iOS"
-            -derivedDataPath "$RUNNER_TEMP/build"
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            CODE_SIGN_IDENTITY=""
-          )
-
-          if [ -n "${WORKSPACE:-}" ] && [ -d "$WORKSPACE" ]; then
-            xcodebuild \
-              -workspace "$WORKSPACE" \
-              -scheme "$SCHEME" \
-              "${COMMON[@]}" \
-              build
-          else
-            xcodebuild \
-              -project "$(basename "$PROJECT")" \
-              -scheme "$SCHEME" \
-              "${COMMON[@]}" \
-              build
-          fi
+          xcodebuild \
+            -project "$(basename "$PROJECT")" \
+            -scheme 3105 \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination generic/platform=iOS \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
 
       - name: Package IPA
-        shell: bash
         run: |
-          set -euo pipefail
-
           APP=$(find "$RUNNER_TEMP/build" -name "*.app" | head -1)
+
           if [ -z "$APP" ]; then
-            echo "Không tìm thấy .app"
-            find "$RUNNER_TEMP/build" -maxdepth 5 || true
+            echo "Không tìm thấy app"
             exit 1
           fi
 
-          echo "APP=$APP"
-          rm -rf Payload Shinn-new.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/
+
           zip -r Shinn-new.ipa Payload
-          ls -lh Shinn-new.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Shinn-new-IPA
           path: Shinn-new.ipa
-          if-no-files-found: error
