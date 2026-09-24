@@ -1,4 +1,4 @@
-name: Build Shinn IPA
+name: Build ShinnCheat IPA
 
 on:
   push:
@@ -93,7 +93,6 @@ jobs:
 
           echo "$LIST"
 
-          # Lấy scheme: ưu tiên Shinn / 3105 / scheme đầu tiên
           SCHEME=$(echo "$LIST" | awk '
             /Schemes:/ {s=1; next}
             s && NF {gsub(/^[ \t]+|[ \t]+$/, "", $0); print; exit}
@@ -125,7 +124,7 @@ jobs:
           set -euo pipefail
           cd "$ROOT"
 
-          ARCHIVE="$RUNNER_TEMP/Shinn.xcarchive"
+          ARCHIVE="$RUNNER_TEMP/ShinnCheat.xcarchive"
           rm -rf "$ARCHIVE"
 
           COMMON=(
@@ -137,6 +136,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO
             CODE_SIGNING_ALLOWED=NO
             DEVELOPMENT_TEAM=""
+            -allowProvisioningUpdates=NO
           )
 
           if [ "${USE_WORKSPACE}" = "1" ]; then
@@ -168,20 +168,20 @@ jobs:
           cp -R "$APP" "$PKG/Payload/"
 
           cd "$PKG"
-          zip -qry "$GITHUB_WORKSPACE/Shinn.ipa" Payload
-          ls -lah "$GITHUB_WORKSPACE/Shinn.ipa"
+          zip -qry "$GITHUB_WORKSPACE/ShinnCheat.ipa" Payload
+          ls -lah "$GITHUB_WORKSPACE/ShinnCheat.ipa"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Shinn-IPA
-          path: Shinn.ipa
+          name: ShinnCheat-IPA
+          path: ShinnCheat.ipa
           if-no-files-found: error
 
       - name: Upload Build Log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Build-Log
+          name: ShinnCheat-Build-Log
           path: ${{ runner.temp }}/build.log
           if-no-files-found: ignore
