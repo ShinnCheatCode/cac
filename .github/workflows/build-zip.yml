@@ -1,122 +1,81 @@
-name: Build CAC IPA
+name: Build 123 IPA
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build IPA
     runs-on: macos-14
     timeout-minutes: 60
 
     steps:
-      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          clean: true
-          fetch-depth: 0
 
-      # 2. Show repository files
-      - name: Show repo files
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "=== Repository ==="
-          pwd
-          ls -lah
-          echo ""
-          echo "ZIP Files:"
-          find . -maxdepth 3 -type f -iname "*.zip" -print || true
-
-      # 3. Extract source.zip
-      - name: Extract source.zip
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP=$(find . -maxdepth 3 -type f -iname "source.zip" | head -1)
-
-          if [ -z "${ZIP:-}" ]; then
-            echo "❌ source.zip not found"
-            exit 1
-          fi
-
-          SRC="$RUNNER_TEMP/source"
-          rm -rf "$SRC"
-          mkdir -p "$SRC"
-
-          unzip -q -o "$ZIP" -d "$SRC"
-
-          echo "Extracted:"
-          find "$SRC" -maxdepth 5 | head -200
-
-      # 4. Detect Xcode project
-      - name: Detect Xcode project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SRC="$RUNNER_TEMP/source"
-
-          WORKSPACE=$(find "$SRC" -type d -name "*.xcworkspace" ! -path "*/Pods/*" | head -1)
-          PROJECT=$(find "$SRC" -type d -name "*.xcodeproj" ! -path "*/Pods/*" | head -1)
-
-          if [ -n "${WORKSPACE:-}" ]; then
-            ROOT=$(dirname "$WORKSPACE")
-            echo "USE_WORKSPACE=1" >> $GITHUB_ENV
-            echo "WORKSPACE=$WORKSPACE" >> $GITHUB_ENV
-          elif [ -n "${PROJECT:-}" ]; then
-            ROOT=$(dirname "$PROJECT")
-            echo "USE_WORKSPACE=0" >> $GITHUB_ENV
-            echo "PROJECT=$PROJECT" >> $GITHUB_ENV
-          else
-            echo "❌ No Xcode project found"
-            exit 1
-          fi
-
-          echo "ROOT=$ROOT" >> $GITHUB_ENV
-
-      # 5. Select Xcode
       - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
-      # 6. Clean
-      - name: Clean DerivedData
-        run: rm -rf ~/Library/Developer/Xcode/DerivedData/*
+      - name: Extract 123.zip
+        shell: bash
+        run: |
+          set -e
 
-      # 7. Show project info
-      - name: Show project information
+          ZIP=$(find . -type f -iname "123.zip" | head -1)
+
+          if [ -z "$ZIP" ]; then
+            echo "123.zip not found"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/src"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/src"
+
+      - name: Detect project
+        shell: bash
+        run: |
+          set -e
+
+          SRC="$RUNNER_TEMP/src"
+
+          WORKSPACE=$(find "$SRC" -name "*.xcworkspace" | head -1)
+          PROJECT=$(find "$SRC" -name "*.xcodeproj" | head -1)
+
+          if [ -n "$WORKSPACE" ]; then
+            ROOT=$(dirname "$WORKSPACE")
+            echo "USE_WORKSPACE=1" >> $GITHUB_ENV
+            echo "WORKSPACE=$WORKSPACE" >> $GITHUB_ENV
+          else
+            ROOT=$(dirname "$PROJECT")
+            echo "USE_WORKSPACE=0" >> $GITHUB_ENV
+            echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+          fi
+
+          echo "ROOT=$ROOT" >> $GITHUB_ENV
+
+      - name: Detect scheme
         shell: bash
         run: |
           cd "$ROOT"
 
           if [ "$USE_WORKSPACE" = "1" ]; then
-            xcodebuild -list -workspace "$(basename "$WORKSPACE")"
+            SCHEME=$(xcodebuild -list -workspace "$(basename "$WORKSPACE")" | awk '/Schemes:/{getline; print $1}')
           else
-            xcodebuild -list -project "$(basename "$PROJECT")"
+            SCHEME=$(xcodebuild -list -project "$(basename "$PROJECT")" | awk '/Schemes:/{getline; print $1}')
           fi
 
-      # 8. Scheme
-      - name: Select Scheme
-        run: |
-          echo "SCHEME=3105" >> $GITHUB_ENV
+          echo "SCHEME=$SCHEME" >> $GITHUB_ENV
+          echo "Scheme: $SCHEME"
 
-      # 9. Archive
-      - name: Archive App
+      - name: Archive
         shell: bash
         run: |
-          set -euo pipefail
-
           cd "$ROOT"
 
-          ARCHIVE="$RUNNER_TEMP/CAC.xcarchive"
-          rm -rf "$ARCHIVE"
+          ARCHIVE="$RUNNER_TEMP/123.xcarchive"
 
           if [ "$USE_WORKSPACE" = "1" ]; then
             xcodebuild archive \
@@ -125,11 +84,7 @@ jobs:
               -configuration Release \
               -destination "generic/platform=iOS" \
               -archivePath "$ARCHIVE" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              DEVELOPMENT_TEAM="" \
-              2>&1 | tee "$RUNNER_TEMP/build.log"
+              CODE_SIGNING_ALLOWED=NO
           else
             xcodebuild archive \
               -project "$(basename "$PROJECT")" \
@@ -137,64 +92,23 @@ jobs:
               -configuration Release \
               -destination "generic/platform=iOS" \
               -archivePath "$ARCHIVE" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              DEVELOPMENT_TEAM="" \
-              2>&1 | tee "$RUNNER_TEMP/build.log"
+              CODE_SIGNING_ALLOWED=NO
           fi
 
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
-      # 10. Find .app
-      - name: Find App
+      - name: Create IPA
         shell: bash
         run: |
           APP=$(find "$ARCHIVE/Products/Applications" -name "*.app" | head -1)
 
-          if [ -z "${APP:-}" ]; then
-            echo "❌ App not found"
-            exit 1
-          fi
+          mkdir Payload
+          cp -R "$APP" Payload/
 
-          echo "APP=$APP" >> $GITHUB_ENV
+          zip -qry 123.ipa Payload
 
-      # 11. Package IPA
-      - name: Create CAC IPA
-        shell: bash
-        run: |
-          PKG="$RUNNER_TEMP/ipa"
-
-          rm -rf "$PKG"
-          mkdir -p "$PKG/Payload"
-
-          cp -R "$APP" "$PKG/Payload/"
-
-          cd "$PKG"
-
-          zip -qry "$GITHUB_WORKSPACE/CAC.ipa" Payload
-
-          echo "Created:"
-          ls -lh "$GITHUB_WORKSPACE/CAC.ipa"
-
-      # 12. Verify IPA
-      - name: Verify IPA
-        run: |
-          unzip -l "$GITHUB_WORKSPACE/CAC.ipa" | head -50
-
-      # 13. Upload IPA
-      - name: Upload CAC IPA
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: CAC-IPA
-          path: CAC.ipa
-          if-no-files-found: error
-
-      # 14. Upload Build Log
-      - name: Upload Build Log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: CAC-Build-Log
-          path: ${{ runner.temp }}/build.log
-          if-no-files-found: ignore
+          name: 123-IPA
+          path: 123.ipa
