@@ -22,74 +22,96 @@ jobs:
         run: |
           ls -lah
           echo "ZIP LIST:"
-          find . -maxdepth 1 -name "*.zip"
+          find . -maxdepth 1 -iname "*.zip"
 
-      - name: Extract Source ZIP
+      - name: Extract Source.zip
         shell: bash
         run: |
           set -e
 
-          ZIP="./Source.zip"
+          ZIP=$(find . -maxdepth 1 -iname "Source.zip" | head -1)
 
-          if [ ! -f "$ZIP" ]; then
-            echo "Không tìm thấy Source.zip"
+          if [ -z "$ZIP" ]; then
+            echo "❌ Không tìm thấy Source.zip"
             exit 1
           fi
+
+          echo "Found: $ZIP"
 
           rm -rf "$RUNNER_TEMP/source"
           mkdir -p "$RUNNER_TEMP/source"
 
-          unzip -o "$ZIP" -d "$RUNNER_TEMP/source"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/source"
 
           echo "SOURCE:"
-          find "$RUNNER_TEMP/source" -maxdepth 2
+          find "$RUNNER_TEMP/source" -maxdepth 3
 
           PROJECT=$(find "$RUNNER_TEMP/source" -name "*.xcodeproj" | head -1)
 
           if [ -z "$PROJECT" ]; then
-            echo "Không tìm thấy xcode project"
+            echo "❌ Không tìm thấy .xcodeproj"
             exit 1
           fi
 
+          ROOT=$(dirname "$PROJECT")
+
           echo "PROJECT=$PROJECT" >> $GITHUB_ENV
-          echo "ROOT=$(dirname "$PROJECT")" >> $GITHUB_ENV
+          echo "ROOT=$ROOT" >> $GITHUB_ENV
 
-      - name: Clean Xcode
-        run: |
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          echo "Project: $PROJECT"
+          echo "Root: $ROOT"
 
-      - name: Build IPA
+      - name: Clean DerivedData
+        run: rm -rf ~/Library/Developer/Xcode/DerivedData/*
+
+      - name: List Schemes
         shell: bash
         run: |
+          cd "$ROOT"
+          xcodebuild -list -project "$(basename "$PROJECT")"
+
+      - name: Build App
+        shell: bash
+        run: |
+          set -o pipefail
           cd "$ROOT"
 
           xcodebuild \
             -project "$(basename "$PROJECT")" \
-            -scheme 3105 \
+            -scheme "3105" \
             -configuration Release \
             -sdk iphoneos \
             -destination generic/platform=iOS \
             -derivedDataPath "$RUNNER_TEMP/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            build | tee "$RUNNER_TEMP/build.log"
 
       - name: Package IPA
+        shell: bash
         run: |
-          APP=$(find "$RUNNER_TEMP/build" -name "*.app" | head -1)
+          APP=$(find "$RUNNER_TEMP/build/Build/Products" -name "*.app" | head -1)
 
           if [ -z "$APP" ]; then
-            echo "Không tìm thấy app"
+            echo "❌ Không tìm thấy .app"
             exit 1
           fi
 
-          mkdir -p Payload
+          mkdir Payload
           cp -R "$APP" Payload/
 
-          zip -r Shinn-new.ipa Payload
+          cd Payload/..
+          zip -qry Shinn-new.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Shinn-new-IPA
           path: Shinn-new.ipa
+
+      - name: Upload Build Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Log
+          path: /Users/runner/work/_temp/build.log
